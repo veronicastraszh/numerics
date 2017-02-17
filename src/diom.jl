@@ -1,67 +1,71 @@
 
-circoff(i, numvecs) = rem(i-1,numvecs)+1
-
-function incomplete_ortho(V, A, iter, numvecs)
+function incomplete_ortho!(h, V, A)
     orthotol = .1
-    w = A*V[:, circoff(iter,numvecs)]
+    w = A*V[1]
     initnorm = norm(w)
-    fv = max(1, iter - numvecs + 1)
-    h = zeros(eltype(V), iter-fv+2)
-    for p =  fv : iter
-        v = view(V,:,circoff(p,numvecs))
-        h[p-fv+1] = dot(w, v)
-        w -= h[p-fv+1] * v
+    for (i,v) = enumerate(V)
+        h[i] = dot(w, v)
+        w -= h[i] * v
     end
     finalnorm = norm(w)
     normratio = finalnorm / initnorm
     if normratio < orthotol
         warn("Orthoganalization cancellation failure, normratio $normratio, reorthogonalizing")
-        for p = fv : iter
-            v = view(V,:,circoff(p,numvecs))
+        for (i,v) = enumerate(V)
             f = dot(w, v)
+            @show(f)
             w -= f * v
-            h[p-fv+1] += f
+            h[i] += f
         end        
     end
-    h[iter-fv+2] = norm(w)
-    w/h[iter-fv+2], h
+    w
 end
 
-function updateLU(l, u, h, ω, iter, numvecs)
-    new_ω = last(h)
-    fv = max(iter - numvecs + 1, 1)
-    lv = min(iter,numvecs)
-    if iter == 1
-        u[1] = h[1]
-        return new_ω
+function updateLU!(u,l,h,nl)
+    for i = size(l,1):-1:2
+        l[i]=l[i-1]
     end
-    size(l,1) == numvecs-1 && shift!(l)
-    push!(l, ω / u[min(iter-1,numvecs)])
-    u[1] = h[1]
-    for i = 2:size(h,1)-1
-        u[i] = h[i] - h[i-1]*l[i-1]
+    l[1] = nl
+    u[end] = h[end]
+    for i in size(h,1)-1:-1:1
+        u[i]=h[i]-u[i+1]*l[i]
     end
-    return new_ω
+    nothing
 end
 
-function diom(A, b, numvecs=10)
+function diom(A, b, numvecs=10; tol=sqrt(eps(eltype(A))))
     LinAlg.checksquare(A)
-    x = zeros(eltype(A), size(A,2))
+    x = zeros(eltype(A), size(b,1))
     β = norm(b)
-    V = zeros(eltype(A), size(A,1), numvecs)
-    V[:,1] = b/β
-    ω = 0
+    V = Any[b/β]
+    ω_saved = 0
+    h = zeros(eltype(A), numvecs)
     u = zeros(eltype(A), numvecs)
-    l = zeros(eltype(A), 0)
+    u[1] = 1
+    l = zeros(eltype(A), numvecs-1)
+    local ω
     for iter = 1:5
-        next_v, next_h = incomplete_ortho(V, A, iter, numvecs)
-        @show(next_v)
-        @show(next_h)
-        V[:,circoff(iter+1,numvecs)] = next_v
-        ω = updateLU(l, u, next_h, ω, iter, numvecs)
-        @show(l)
-        @show(u)
+        w = incomplete_ortho!(h, V, A)
+        ω = norm(w)
         @show(ω)
+        @show(h)
+        if ω >= tol
+            unshift!(V,w/ω)
+            (size(V,1) > numvecs) && pop!(V)
+            updateLU!(u,l,h,ω_saved/u[1])
+            ω_saved = ω
+            @show(l)
+            @show(u)
+        else
+        end
     end
-    V
+    (ω,h,l,u)
+end
+
+function checkV(V)
+    for (i,v) = enumerate(V)
+        for j = i:size(V,1)
+            println("($i,$j) $(dot(V[i],V[j]))")
+        end
+    end
 end
