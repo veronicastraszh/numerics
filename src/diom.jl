@@ -33,34 +33,85 @@ function updateLU!(u,l,h,nl)
     nothing
 end
 
-function diom(A, b, numvecs=10; tol=sqrt(eps(eltype(A))))
-    LinAlg.checksquare(A)
-    x = zeros(eltype(A), size(b,1))
+function computeP(P,u,v)
+    new_p = copy(v)
+    for (i,p) = enumerate(P)
+        new_p -= p*u[i+1]
+    end
+    return new_p / u[1]
+end
+
+function diom(A, b;
+              numvecs=10,
+              tol=sqrt(eps(eltype(A))),
+              numiters=100,
+              )
+    dim = LinAlg.checksquare(A)
+    x = zeros(eltype(A), dim)
     β = norm(b)
-    V = Any[b/β]
+    V = [b/β]
+    P = Array{Vector{eltype(A)}}(0)
     ω_saved = 0
     h = zeros(eltype(A), numvecs)
     u = zeros(eltype(A), numvecs)
     u[1] = 1
     l = zeros(eltype(A), numvecs-1)
-    local ω
-    for iter = 1:5
+    local ω, ζ
+    for iter = 1:numiters
         w = incomplete_ortho!(h, V, A)
         ω = norm(w)
-        @show(ω)
-        @show(h)
-        if ω >= tol
-            unshift!(V,w/ω)
-            (size(V,1) > numvecs) && pop!(V)
+        if abs(ω) >= tol
+            new_v = w/ω
             updateLU!(u,l,h,ω_saved/u[1])
             ω_saved = ω
-            @show(l)
-            @show(u)
+            @show(h,ω,u,l)
+            if abs(u[1]) >= tol
+                new_p = computeP(P,u,V[1])
+                ζ = (iter == 1) ? β : -l[1]*ζ
+                @show(ζ)
+                x += ζ*new_p
+                unshift!(V,new_v)
+                length(V) > numvecs && pop!(V)
+                unshift!(P,new_p)
+                length(P) >= numvecs && pop!(P)
+            else
+                error("u[1] below tol")
+            end
         else
+            warn("ω below tol")
+            return x
+        end
+        (@show(ω*abs(ζ/u[1])) < tol) && break
+    end
+    x
+end
+
+function fiom(A, b;
+              numiters=10,
+              tol=sqrt(eps(eltype(A))),
+              )
+    dim = LinAlg.checksquare(A)
+    H = zeros(eltype(A),numiters+1,numiters)
+    β = norm(b)
+    VA = [b/β]
+    for iter = 1:numiters
+        w = incomplete_ortho!(view(H,iter:-1:1,iter),
+                              VA,
+                              A)
+        ω = norm(w)
+        if (abs(ω) > tol)
+            H[iter+1,iter] = ω
+            unshift!(VA,w/ω)
+        else
+            error("ω tolerance")
         end
     end
-    (ω,h,l,u)
+    V = foldl(hcat,VA[end:-1:1])
+    lu = lufact(H[1:numiters,:],Val{false})
+    y = lu \ vcat(β,zeros(numiters-1))
+    V,H,lu[:L],lu[:U],y,V[:,1:numiters]*y
 end
+
 
 function checkV(V)
     for (i,v) = enumerate(V)
