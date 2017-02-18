@@ -103,7 +103,8 @@ function fiom(A, b;
             H[iter+1,iter] = ω
             unshift!(VA,w/ω)
         else
-            error("ω tolerance")
+            warn("ω tolerance")
+            break
         end
     end
     V = foldl(hcat,VA[end:-1:1])
