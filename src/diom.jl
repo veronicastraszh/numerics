@@ -13,7 +13,6 @@ function incomplete_ortho!(h, V, A)
         warn("Orthoganalization cancellation failure, normratio $normratio, reorthogonalizing")
         for (i,v) = enumerate(V)
             f = dot(w, v)
-            @show(f)
             w -= f * v
             h[i] += f
         end        
@@ -51,37 +50,36 @@ function diom(A, b;
     β = norm(b)
     V = [b/β]
     P = Array{Vector{eltype(A)}}(0)
-    ω_saved = 0
     h = zeros(eltype(A), numvecs)
+    ω = 1
     u = zeros(eltype(A), numvecs)
     u[1] = 1
     l = zeros(eltype(A), numvecs-1)
-    local ω, ζ
+    local ζ
     for iter = 1:numiters
         w = incomplete_ortho!(h, V, A)
-        ω = norm(w)
-        if abs(ω) >= tol
-            new_v = w/ω
-            updateLU!(u,l,h,ω_saved/u[1])
-            ω_saved = ω
-            @show(h,ω,u,l)
-            if abs(u[1]) >= tol
-                new_p = computeP(P,u,V[1])
-                ζ = (iter == 1) ? β : -l[1]*ζ
-                @show(ζ)
-                x += ζ*new_p
-                unshift!(V,new_v)
+        updateLU!(u,l,h,ω/u[1])
+        #@show(h,u,l)
+        if abs(u[1]) >= tol
+            p = computeP(P,u,V[1])
+            ζ = (iter == 1) ? β : -l[1]*ζ
+            #@show(ζ)
+            x += ζ*p
+            unshift!(P,p)
+            length(P) >= numvecs && pop!(P)
+            ω = norm(w)
+            #@show(ω)
+            if abs(ω) >= tol
+                unshift!(V,w/ω)
                 length(V) > numvecs && pop!(V)
-                unshift!(P,new_p)
-                length(P) >= numvecs && pop!(P)
             else
-                error("u[1] below tol")
+                warn("ω below tol")
+                return x
             end
         else
-            warn("ω below tol")
-            return x
+            error("u[1] below tol")
         end
-        (@show(ω*abs(ζ/u[1])) < tol) && break
+        @show(ω*abs(ζ/u[1])) < tol && break
     end
     x
 end
