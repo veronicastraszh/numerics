@@ -23,7 +23,7 @@ end
 
 function naiveGMRES(A,b;
                     numiters=10,
-                    tol=sqrt(eps(eltype(A))))
+                    tol=eps(eltype(A)))
     dim = LinAlg.checksquare(A)
     x = zeros(dim)
     β = norm(b)
@@ -47,5 +47,50 @@ function naiveGMRES(A,b;
     x = V[:,1:numiters] * y
     x,g,V,H,Q,R,y
 end
+
+function givensGMRES(A,b;
+                    numiters=10,
+                    tol=eps(eltype(A)))
+    dim = LinAlg.checksquare(A)
+    x = zeros(dim)
+    β = norm(b)
+    V = zeros(eltype(A),dim,numiters+1)
+    V[:,1] = b/β
+    H = zeros(eltype(A),numiters+1,numiters)
+    for i = 1:numiters
+        w=ortho!(view(H,:,i),
+                 A*V[:,i],
+                 (V[:,x] for x = 1:i))
+        H[i+1,i] = norm(w)
+        if H[i+1,i] < tol
+            warn("tol fail")
+            break;
+        end
+        V[:,i+1]=w/H[i+1,i]
+    end
+    R = copy(H)
+    g = [β;zeros(numiters)]
+    Q = LinAlg.Rotation{eltype(A)}([])
+    for i = 1:numiters
+        (Ω,h) = givens(view(R,:,i),i,i+1)
+        R[i,i] = h
+        R[i+1,i] = 0
+        for j = i+1 : numiters
+            A_mul_B!(Ω,view(R,:,j))
+        end
+        A_mul_B!(Ω,g)
+        A_mul_B!(Ω,Q)
+    end
+    y = @view(R[1:numiters,:])\@view(g[1:numiters])
+    x = @view(V[:,1:numiters])*y
+    x,g,V,H,Q,R,y
+end
+
+immutable CSPair{T}
+    c::T
+    s::T
+end
+
+cleanmat(A) = map(x -> abs(x) < sqrt(eps(eltype(A))) ? 0 : x, A)
 
 end
