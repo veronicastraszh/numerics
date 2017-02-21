@@ -23,7 +23,7 @@ end
 
 function naiveGMRES(A,b;
                     numiters=10,
-                    tol=eps(eltype(A)))
+                    tol=sqrt(eps(eltype(A))))
     dim = LinAlg.checksquare(A)
     x = zeros(dim)
     β = norm(b)
@@ -50,7 +50,7 @@ end
 
 function givensGMRES(A,b;
                     numiters=10,
-                    tol=eps(eltype(A)))
+                    tol=sqrt(eps(eltype(A))))
     dim = LinAlg.checksquare(A)
     x = zeros(dim)
     β = norm(b)
@@ -85,6 +85,49 @@ function givensGMRES(A,b;
     x = @view(V[:,1:numiters])*y
     x,g,V,H,Q,R,y
 end
+
+function progressiveGMRES(A,b;
+                          maxiters=10,
+                          tol=sqrt(eps(eltype(A))))
+    dim = LinAlg.checksquare(A)
+    x = zeros(dim)
+    β = norm(b)
+    V = zeros(eltype(A),dim,maxiters+1)
+    V[:,1] = b/β
+    H = zeros(eltype(A),maxiters+1,maxiters)
+    g = [β ; zeros(maxiters)]
+    Q = LinAlg.Rotation{eltype(A)}([])
+    R = zeros(eltype(A),maxiters,maxiters)
+    for i = 1:maxiters
+        w=ortho!(view(H,:,i),
+                 A*V[:,i],
+                 (V[:,x] for x = 1:i))
+        H[i+1,i] = norm(w)
+        if H[i+1,i] < tol
+            error("tol fail")
+        end
+        V[:,i+1]=w/H[i+1,i]
+        R[1:i,i] = H[1:i,i]
+        for Ωₙ = Q.rotations
+            A_mul_B!(Ωₙ,view(R,:,i))
+        end
+        (Ω,h) = givens(R[i,i],H[i+1,i],i,i+1)
+        R[i,i] = h
+        A_mul_B!(Ω, g)
+        A_mul_B!(Ω, Q)
+        if abs(g[i+1]) < tol
+            R = view(R,1:i,1:i)
+            g = view(g,1:i+1)
+            V = view(V,:,1:i+1)
+            break
+        end
+    end
+    @show(size(R),size(g),size(V))
+    y = R\@view(g[1:end-1])
+    x = @view(V[:,1:end-1]) * y
+    x,g,V,H,Q,R,y
+end
+
 
 immutable CSPair{T}
     c::T
