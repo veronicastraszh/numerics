@@ -1,11 +1,13 @@
 module GMRES
-export naiveGMRES
+#export naiveGMRES
+
+using DataStructures
 
 function ortho!(h, w, vs)
     orthotol = .1
     initnorm = norm(w)
     for (i,v) = enumerate(vs)
-        h[i] = dot(w, v)
+        h[i] = vecdot(w, v)
         LinAlg.axpy!(-h[i],v,w)
     end
     finalnorm = norm(w)
@@ -13,7 +15,7 @@ function ortho!(h, w, vs)
     if normratio < orthotol
         warn("Orthoganalization cancellation failure, normratio $normratio, reorthogonalizing")
         for (i,v) = enumerate(vs)
-            f = dot(w, v)
+            f = vecdot(w, v)
             LinAlg.axpy!(-f,v,w)
             h[i] += f
         end        
@@ -23,6 +25,8 @@ end
 
 function naiveGMRES(A,b;
                     numiters=10,
+                    numvecs=numiters,
+                    diom=false,
                     tol=sqrt(eps(eltype(A))))
     dim = LinAlg.checksquare(A)
     x = zeros(dim)
@@ -31,9 +35,10 @@ function naiveGMRES(A,b;
     V[:,1] = b/β
     H = zeros(eltype(A),numiters+1,numiters)
     for i = 1:numiters
-        w=ortho!(view(H,:,i),
+        s = max(i-numvecs+1,1)
+        w=ortho!(@view(H[s:end,i]),
                  A*V[:,i],
-                 (V[:,x] for x = 1:i))
+                 (V[:,x] for x = s:i))
         H[i+1,i] = norm(w)
         if H[i+1,i] < tol
             warn("tol fail")
@@ -41,67 +46,36 @@ function naiveGMRES(A,b;
         end
         V[:,i+1]=w/H[i+1,i]
     end
-    (Q,R) = qr(H,Val{false},thin=false)
-    g = At_mul_B(Q,[β;zeros(numiters)])
-    y = R \ g[1:numiters]
-    x = V[:,1:numiters] * y
+    if !diom
+        (Q,R) = qr(H,Val{false},thin=false)
+        g = At_mul_B(Q,[β;zeros(numiters)])
+    else
+        (Q,R) = qr(@view(H[1:end-1,:]),Val{false},thin=false)
+        g = At_mul_B(Q,[β;zeros(numiters-1)])
+    end
+    y = R \ @view(g[1:numiters])
+    x = @view(V[:,1:numiters]) * y
     x,g,V,H,Q,R,y
 end
 
-function givensGMRES(A,b;
-                    numiters=10,
-                    tol=sqrt(eps(eltype(A))))
-    dim = LinAlg.checksquare(A)
-    x = zeros(dim)
-    β = norm(b)
-    V = zeros(eltype(A),dim,numiters+1)
-    V[:,1] = b/β
-    H = zeros(eltype(A),numiters+1,numiters)
-    for i = 1:numiters
-        w=ortho!(view(H,:,i),
-                 A*V[:,i],
-                 (V[:,x] for x = 1:i))
-        H[i+1,i] = norm(w)
-        if H[i+1,i] < tol
-            warn("tol fail")
-            break;
-        end
-        V[:,i+1]=w/H[i+1,i]
-    end
-    R = copy(H)
-    g = [β;zeros(numiters)]
-    Q = LinAlg.Rotation{eltype(A)}([])
-    for i = 1:numiters
-        (Ω,h) = givens(view(R,:,i),i,i+1)
-        R[i,i] = h
-        R[i+1,i] = 0
-        for j = i+1 : numiters
-            A_mul_B!(Ω,view(R,:,j))
-        end
-        A_mul_B!(Ω,g)
-        A_mul_B!(Ω,Q)
-    end
-    y = @view(R[1:numiters,:])\@view(g[1:numiters])
-    x = @view(V[:,1:numiters])*y
-    x,g,V,H,Q,R,y
-end
-
-function progressiveGMRES(A,b;
-                          maxiters=10,
-                          tol=sqrt(eps(eltype(A))))
-    dim = LinAlg.checksquare(A)
-    x = zeros(dim)
-    β = norm(b)
+function incompleteGMRES(A,b, x=zeros(b);
+                         maxiters=100,
+                         numvecs=10,
+                         tol=sqrt(eps(eltype(A))))
+    dim = size(b)[1]
+    r₀ = b - A*x
+    β = norm(r₀)
     V = zeros(eltype(A),dim,maxiters+1)
-    V[:,1] = b/β
+    V[:,1] = r₀/β
     H = zeros(eltype(A),maxiters+1,maxiters)
     g = [β ; zeros(maxiters)]
     Q = LinAlg.Rotation{eltype(A)}([])
     R = zeros(eltype(A),maxiters,maxiters)
     for i = 1:maxiters
-        w=ortho!(view(H,:,i),
+        s = max(i-numvecs + 1, 1)
+        w=ortho!(@view(H[s:end,i]),
                  A*V[:,i],
-                 (V[:,x] for x = 1:i))
+                 (V[:,x] for x = s:i))
         H[i+1,i] = norm(w)
         if H[i+1,i] < tol
             error("tol fail")
@@ -122,16 +96,68 @@ function progressiveGMRES(A,b;
             break
         end
     end
-    @show(size(R),size(g),size(V))
     y = R\@view(g[1:end-1])
     x = @view(V[:,1:end-1]) * y
     x,g,V,H,Q,R,y
 end
 
-
 immutable CSPair{T}
     c::T
     s::T
+end
+
+function optGMRES(A,b, x=zeros(b);
+                  maxiters=100,
+                  numvecs=10,
+                  tol=sqrt(eps(eltype(A))))
+    dim = size(b)[1]
+    r₀ = b - A*x
+    β = norm(r₀)
+    V = CircularDeque{Vector{eltype(b)}}(numvecs)
+    push!(V,r₀/β)
+    h = zeros(eltype(b),numvecs+1)
+    r = zeros(h)
+    Q = CircularDeque{CSPair{eltype(b)}}(numvecs+1)
+    γ = β
+    P = CircularDeque{Vector{eltype(b)}}(numvecs)
+    for i = 1:maxiters
+        l = length(V)
+        w=ortho!(h, A*back(V), V)
+        h[l+1] = norm(w)
+        for j = 1:l-1
+            if j == 1
+                r[1]=Q[j].s * h[1]
+                r[2]=Q[j].c * h[2]
+            else
+                r[j] = Q[j].c*r[j] + Q[j].s*h[j]
+                r[j+1] = -Q[j].s*r[j] + Q[j].c*h[j]
+            end
+        end
+        (Ω,r[l]) = givens(r[l],h[l+1],1,2)
+        Ωₙ = CSPair{eltype(b)}(Ω.c,Ω.s)
+        length(Q) == numvecs+1 && shift!(Q)
+        push!(Q, Ωₙ)
+        γₙ = -Ωₙ.s*γ
+        γ = Ωₙ.c*γ
+        p = back(V)
+        for j = 1:l-1
+            LinAlg.axpy!(-r[j],P[j],p)
+        end
+        scale!(p,one(r[l])/r[l])
+        length(P) == numvecs && shift!(P)
+        push!(P,p)
+        LinAlg.axpy!(γ,p,x)
+        if abs(γₙ) < tol
+            break
+        end
+        γ = γₙ
+        if h[l+1] < tol
+            error("ortho failure")
+        end
+        length(V) == numvecs && shift!(V)
+        push!(V,w/h[l+1])
+    end
+    x
 end
 
 cleanmat(A) = map(x -> abs(x) < sqrt(eps(eltype(A))) ? 0 : x, A)
