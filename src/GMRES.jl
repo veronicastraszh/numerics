@@ -101,9 +101,11 @@ function incompleteGMRES(A,b, x=zeros(b);
     x,g,V,H,Q,R,y
 end
 
-immutable CSPair{T}
-    c::T
-    s::T
+@inline function safepush!(C,x)
+    if capacity(C) == length(C)
+        shift!(C)
+    end
+    push!(C,x)
 end
 
 function optGMRES(A,b, x=zeros(b);
@@ -111,51 +113,63 @@ function optGMRES(A,b, x=zeros(b);
                   numvecs=10,
                   tol=sqrt(eps(eltype(A))))
     dim = size(b)[1]
-    r₀ = b - A*x
-    β = norm(r₀)
-    V = CircularDeque{Vector{eltype(b)}}(numvecs)
-    push!(V,r₀/β)
-    h = zeros(eltype(b),numvecs+1)
-    r = zeros(h)
-    Q = CircularDeque{CSPair{eltype(b)}}(numvecs+1)
-    γ = β
-    P = CircularDeque{Vector{eltype(b)}}(numvecs)
+
+    local r₀,β,V,h,Q,γ,P
+    function init()
+        r₀ = b - A*x
+        β = norm(r₀)
+        V = CircularDeque{Vector{eltype(b)}}(numvecs)
+        push!(V,r₀/β)
+        h = zeros(eltype(b),numvecs+2)
+        Q = CircularDeque{LinAlg.Givens{eltype(b)}}(numvecs)
+        γ = [β ; 0]
+        P = CircularDeque{Vector{eltype(b)}}(numvecs)
+    end
+    init()
+    
     for i = 1:maxiters
-        l = length(V)
-        w=ortho!(h, A*back(V), V)
-        h[l+1] = norm(w)
-        for j = 1:l-1
-            if j == 1
-                r[1]=Q[j].s * h[1]
-                r[2]=Q[j].c * h[2]
-            else
-                r[j] = Q[j].c*r[j] + Q[j].s*h[j]
-                r[j+1] = -Q[j].s*r[j] + Q[j].c*h[j]
-            end
+        len = length(V)
+        qs = length(Q)
+        hoff = qs < numvecs ? 0 : 1
+
+        # Orthogonalize
+        h[1]=0
+        w=ortho!(view(h,1+hoff:len+hoff), A*back(V), V)
+        h[len+1+hoff] = ω = norm(w)
+
+        # Apply rotations to h
+        for (j,Ω) = enumerate(Q)
+            A_mul_B!(Ω,view(h,j:j+1))
         end
-        (Ω,r[l]) = givens(r[l],h[l+1],1,2)
-        Ωₙ = CSPair{eltype(b)}(Ω.c,Ω.s)
-        length(Q) == numvecs+1 && shift!(Q)
-        push!(Q, Ωₙ)
-        γₙ = -Ωₙ.s*γ
-        γ = Ωₙ.c*γ
-        p = back(V)
-        for j = 1:l-1
-            LinAlg.axpy!(-r[j],P[j],p)
+        qs = length(Q)
+        (Ω,h[len+hoff]) =
+            givens(h[len+hoff],h[len+1+hoff],1,2)
+        h[len+1+hoff]=0
+        A_mul_B!(Ω,γ)
+        safepush!(Q, Ω)
+
+        # Next p
+        p = copy(back(V))
+        for (j,pₙ) = Enumerate(P)
+            LinAlg.axpy!(-h[j],pₙ,p)
         end
-        scale!(p,one(r[l])/r[l])
-        length(P) == numvecs && shift!(P)
-        push!(P,p)
-        LinAlg.axpy!(γ,p,x)
-        if abs(γₙ) < tol
+        scale!(p,one(h[1])/h[length(P)+1])
+        safepush!(P,p)
+
+        # Update x
+        LinAlg.axpy!(γ[1],p,x)
+
+        # Termination
+        if abs(γ[2]) < tol
             break
         end
-        γ = γₙ
-        if h[l+1] < tol
+
+        # Ready next iteration
+        γ = [ γ[2] ; 0 ]        
+        if ω < tol
             error("ortho failure")
         end
-        length(V) == numvecs && shift!(V)
-        push!(V,w/h[l+1])
+        safepush!(V,w/ω)
     end
     x
 end
