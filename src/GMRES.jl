@@ -114,16 +114,17 @@ function optGMRES(A,b, x=zeros(b);
                   tol=sqrt(eps(eltype(A))))
     dim = size(b)[1]
 
-    local r₀,β,V,h,Q,γ,P
+    local r,r₀,β,V,h,Q,γ,P,stallp
     function init()
         r₀ = b - A*x
-        β = norm(r₀)
+        r = β = norm(r₀)
         V = CircularDeque{Vector{eltype(b)}}(numvecs)
         push!(V,r₀/β)
         h = zeros(eltype(b),numvecs+2)
         Q = CircularDeque{LinAlg.Givens{eltype(b)}}(numvecs)
         γ = [β ; 0]
         P = CircularDeque{Vector{eltype(b)}}(numvecs)
+        stallp = false
     end
     init()
     
@@ -141,7 +142,6 @@ function optGMRES(A,b, x=zeros(b);
         for (j,Ω) = enumerate(Q)
             A_mul_B!(Ω,view(h,j:j+1))
         end
-        qs = length(Q)
         (Ω,h[len+hoff]) =
             givens(h[len+hoff],h[len+1+hoff],1,2)
         h[len+1+hoff]=0
@@ -161,8 +161,20 @@ function optGMRES(A,b, x=zeros(b);
 
         # Termination
         if abs(γ[2]) < tol
-            break
+            @goto success
         end
+
+        # Check for stalls
+        if isapprox(r, abs(γ[2]))
+            if stallp
+                warn("Stalled at $(abs(γ[2]))")
+                init()
+                continue
+            else
+                stallp = true
+            end
+        end
+        r = abs(γ[2])
 
         # Ready next iteration
         γ = [ γ[2] ; 0 ]        
@@ -171,6 +183,9 @@ function optGMRES(A,b, x=zeros(b);
         end
         safepush!(V,w/ω)
     end
+    warn("Terminated at maxiter, $(abs(γ[1]))")
+
+    @label success
     x
 end
 
