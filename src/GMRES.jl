@@ -108,27 +108,28 @@ end
     push!(C,x)
 end
 
-function optGMRES(A,b, x=zeros(b);
-                  maxiters=100,
-                  numvecs=10,
-                  tol=sqrt(eps(eltype(A))))
+function inneroptGMRES(A,b,x,maxiters,numvecs,tol)
     dim = size(b)[1]
+    T = eltype(b)
 
-    local r,r₀,β,V,h,Q,γ,P,stallp
-    function init()
-        r₀ = b - A*x
-        r = β = norm(r₀)
-        V = CircularDeque{Vector{eltype(b)}}(numvecs)
-        push!(V,r₀/β)
-        h = zeros(eltype(b),numvecs+2)
-        Q = CircularDeque{LinAlg.Givens{eltype(b)}}(numvecs)
-        γ = [β ; 0]
-        P = CircularDeque{Vector{eltype(b)}}(numvecs)
-        stallp = false
-    end
-    init()
+    local r₀,r,V,h,Q,γ,P,stallp
+    initp = true
     
     for i = 1:maxiters
+
+        if initp
+            r₀ = b - A*x
+            r = β = norm(r₀)
+            V = CircularDeque{Vector{T}}(numvecs)
+            push!(V,r₀/β)
+            h = zeros(T,numvecs+2)
+            Q = CircularDeque{LinAlg.Givens{T}}(numvecs)
+            γ = [β ; 0]
+            P = CircularDeque{Vector{T}}(numvecs)
+            stallp = false
+            initp = false
+        end
+        
         len = length(V)
         qs = length(Q)
         hoff = qs < numvecs ? 0 : 1
@@ -139,8 +140,8 @@ function optGMRES(A,b, x=zeros(b);
         h[len+1+hoff] = ω = norm(w)
 
         # Apply rotations to h
-        for (j,Ω) = enumerate(Q)
-            A_mul_B!(Ω,view(h,j:j+1))
+        for j = 1:qs
+            A_mul_B!(Q[j],view(h,j:j+1))
         end
         (Ω,h[len+hoff]) =
             givens(h[len+hoff],h[len+1+hoff],1,2)
@@ -150,8 +151,8 @@ function optGMRES(A,b, x=zeros(b);
 
         # Next p
         p = copy(back(V))
-        for (j,pₙ) = Enumerate(P)
-            LinAlg.axpy!(-h[j],pₙ,p)
+        for j = 1:length(P)
+            LinAlg.axpy!(-h[j],P[j],p)
         end
         scale!(p,one(h[1])/h[length(P)+1])
         safepush!(P,p)
@@ -168,7 +169,7 @@ function optGMRES(A,b, x=zeros(b);
         if isapprox(r, abs(γ[2]))
             if stallp
                 warn("Stalled at $(abs(γ[2]))")
-                init()
+                initp = true
                 continue
             else
                 stallp = true
@@ -187,6 +188,13 @@ function optGMRES(A,b, x=zeros(b);
 
     @label success
     x
+end
+
+function optGMRES(A,b, x=zeros(b);
+                  maxiters::Int=100,
+                  numvecs::Int=10,
+                  tol::Float64=sqrt(eps(eltype(b))))
+    inneroptGMRES(A,b,x,maxiters,numvecs,tol)
 end
 
 cleanmat(A) = map(x -> abs(x) < sqrt(eps(eltype(A))) ? 0 : x, A)

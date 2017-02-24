@@ -3,10 +3,11 @@ push!(LOAD_PATH, pwd())
 
 import GMRES
 
-A = sprandn(500,500,0.01)
+dim=100000
+A = sprandn(dim,dim,0.001)
 scale!(A,.1)
-A += speye(500) * 2
+A += speye(dim)
 
-b = randn(500)
+b = randn(dim)
 
 nothing
