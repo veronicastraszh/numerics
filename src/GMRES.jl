@@ -161,24 +161,25 @@ function inneroptGMRES(A,b,x,maxiters,numvecs,tol)
         LinAlg.axpy!(γ[1],p,x)
 
         # Termination
-        if abs(γ[2]) < tol
+        γ[1] = γ[2]
+        γ[2] = 0
+        if abs(γ[1]) < tol
             @goto success
         end
 
         # Check for stalls
-        if isapprox(r, abs(γ[2]))
+        if isapprox(r, abs(γ[1]))
             if stallp
-                warn("Stalled at $(abs(γ[2]))")
+                warn("Stalled at $(abs(γ[1]))")
                 initp = true
                 continue
             else
                 stallp = true
             end
         end
-        r = abs(γ[2])
+        r = abs(γ[1])
 
         # Ready next iteration
-        γ = [ γ[2] ; 0 ]        
         if ω < tol
             error("ortho failure")
         end
