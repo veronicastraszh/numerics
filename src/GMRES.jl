@@ -124,7 +124,7 @@ function inneroptGMRES(A,b,x,maxiters,numvecs,tol)
             push!(V,r₀/β)
             h = zeros(T,numvecs+2)
             Q = CircularDeque{LinAlg.Givens{T}}(numvecs)
-            γ = [β ; 0]
+            γ = [β ; 0.0]
             P = CircularDeque{Vector{T}}(numvecs)
             stallp = false
             initp = false
@@ -135,7 +135,7 @@ function inneroptGMRES(A,b,x,maxiters,numvecs,tol)
         hoff = qs < numvecs ? 0 : 1
 
         # Orthogonalize
-        h[1]=0
+        h[1]=0.0
         w=ortho!(view(h,1+hoff:len+hoff), A*back(V), V)
         h[len+1+hoff] = ω = norm(w)
 
@@ -145,7 +145,7 @@ function inneroptGMRES(A,b,x,maxiters,numvecs,tol)
         end
         (Ω,h[len+hoff]) =
             givens(h[len+hoff],h[len+1+hoff],1,2)
-        h[len+1+hoff]=0
+        h[len+1+hoff]=0.0
         A_mul_B!(Ω,γ)
         safepush!(Q, Ω)
 
@@ -162,7 +162,7 @@ function inneroptGMRES(A,b,x,maxiters,numvecs,tol)
 
         # Termination
         γ[1] = γ[2]
-        γ[2] = 0
+        γ[2] = 0.0
         if abs(γ[1]) < tol
             @goto success
         end
